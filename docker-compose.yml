@@ -1,0 +1,118 @@
+version: '3.8'
+
+services:
+  # PostgreSQL database
+  db:
+    image: postgres:15-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-lexiai}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-lexiai_password}
+      - POSTGRES_DB=${POSTGRES_DB:-lexiai}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lexiai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - lexiai-network
+
+  # Redis for caching and task queue
+  redis:
+    image: redis:alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - lexiai-network
+
+  # Backend API service
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - FLASK_APP=src/main.py
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-lexiai}:${POSTGRES_PASSWORD:-lexiai_password}@db:5432/${POSTGRES_DB:-lexiai}
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-jwt-secret-key}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-your-stripe-secret-key}
+      - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY:-your-stripe-publishable-key}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-your-stripe-webhook-secret}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-your-openai-api-key}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET:-}
+      - STORAGE_TYPE=${STORAGE_TYPE:-local}
+    volumes:
+      - backend_data:/app/uploads
+      - backend_data:/app/temp
+    restart: unless-stopped
+    networks:
+      - lexiai-network
+
+  # Celery worker for background tasks
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: celery -A src.tasks.celery worker --loglevel=info
+    depends_on:
+      - backend
+      - redis
+    environment:
+      - FLASK_APP=src/main.py
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-lexiai}:${POSTGRES_PASSWORD:-lexiai_password}@db:5432/${POSTGRES_DB:-lexiai}
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-jwt-secret-key}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-your-stripe-secret-key}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-your-openai-api-key}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET:-}
+      - STORAGE_TYPE=${STORAGE_TYPE:-local}
+    volumes:
+      - backend_data:/app/uploads
+      - backend_data:/app/temp
+    restart: unless-stopped
+    networks:
+      - lexiai-network
+
+  # Frontend web application
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    depends_on:
+      - backend
+    ports:
+      - "${PORT:-80}:80"
+    restart: unless-stopped
+    networks:
+      - lexiai-network
+
+networks:
+  lexiai-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  backend_data:
+
